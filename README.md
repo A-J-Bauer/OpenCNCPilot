@@ -5,7 +5,7 @@ OpenCNCPilot is a GRBL compatible G-Code Sender.
 It's main feature is it's ability to **probe user-defined areas for warpage and wrap the toolpath around the curved surface**.
 This is especially useful for engraving metal surfaces with V-shaped cutters where any deviation in the Z-direction will result in wider or narrower traces, eg for **isolation milling PCBs** where warpage would result in broken or shorted traces.
 
-![Screenshot](https://raw.githubusercontent.com/martin2250/OpenCNCPilot/master/img/Screenshot.png)
+![Screenshot](https://raw.githubusercontent.com/A-J-Bauer/OpenCNCPilot/master/img/Screenshot.png)
 
 It is written in C# and uses WPF for it's UI. Sadly this means that it will not run under linux as Mono does not support WPF.
 The 3D viewport is managed with HelixToolkit.
