@@ -11,6 +11,7 @@ using OpenCNCPilot.GCode;
 using OpenCNCPilot.GCode.GCodeCommands;
 using System.Collections.ObjectModel;
 using System.Collections.Generic;
+using System.Diagnostics;
 
 namespace OpenCNCPilot.Communication
 {
@@ -48,8 +49,9 @@ namespace OpenCNCPilot.Communication
 		public event Action FileChanged;
 		public event Action FilePositionChanged;
 		public event Action OverrideChanged;
+        public event Action JogCanceled;
 
-		public Vector3 MachinePosition { get; private set; } = new Vector3();   //No events here, the parser triggers a single event for both
+        public Vector3 MachinePosition { get; private set; } = new Vector3();   //No events here, the parser triggers a single event for both
 		public Vector3 WorkOffset { get; private set; } = new Vector3();
 		public Vector3 WorkPosition { get { return MachinePosition - WorkOffset; } }
 
@@ -63,7 +65,7 @@ namespace OpenCNCPilot.Communication
 		public bool PinStateProbe { get; private set; } = false;
 		public bool PinStateLimitX { get; private set; } = false;
 		public bool PinStateLimitY { get; private set; } = false;
-		public bool PinStateLimitZ { get; private set; } = false;
+		public bool PinStateLimitZ { get; private set; } = false;        
 
 		public double FeedRateRealtime { get; private set; } = 0;
 		public double SpindleSpeedRealtime { get; private set; } = 0;
@@ -236,15 +238,17 @@ namespace OpenCNCPilot.Communication
 		Queue ToSend = Queue.Synchronized(new Queue());
 		Queue ToSendPriority = Queue.Synchronized(new Queue()); //contains characters (for soft reset, feed hold etc)
 		Queue ToSendMacro = Queue.Synchronized(new Queue());
+        StreamReader reader = null;
+        StreamWriter writer = null;
 
-		private void Work()
+        private void Work()
 		{
 			try
 			{
-				StreamReader reader = new StreamReader(Connection);
-				StreamWriter writer = new StreamWriter(Connection);
+				reader = new StreamReader(Connection);
+				writer = new StreamWriter(Connection);
 
-				int StatusPollInterval = Properties.Settings.Default.StatusPollInterval;
+                int StatusPollInterval = Properties.Settings.Default.StatusPollInterval;
 
 				int ControllerBufferSize = Properties.Settings.Default.ControllerBufferSize;
 				BufferState = 0;
@@ -261,211 +265,210 @@ namespace OpenCNCPilot.Communication
 				writer.Write("\n$G\n");
 				writer.Write("\n$#\n");
 				writer.Flush();
-
+                
 				while (true)
 				{
 					Task<string> lineTask = reader.ReadLineAsync();
 
 					while (!lineTask.IsCompleted)
 					{
-						if (!Connected)
-						{
-							return;
-						}
+                        if (!Connected)
+                        {
+                            return;
+                        }
 
-						while (ToSendPriority.Count > 0)
-						{
-							writer.Write((char)ToSendPriority.Dequeue());
-							writer.Flush();
-						}
-						if (Mode == OperatingMode.SendFile)
-						{
-							if (File.Count > FilePosition && (File[FilePosition].Length + 1) < (ControllerBufferSize - BufferState))
-							{
-								string send_line = File[FilePosition].Replace(" ", ""); // don't send whitespace to machine
+                        while (ToSendPriority.Count > 0)
+                        {
+                            writer.Write((char)ToSendPriority.Dequeue());
+                            writer.Flush();
+                        }
+                        if (Mode == OperatingMode.SendFile)
+                        {
+                            if (File.Count > FilePosition && (File[FilePosition].Length + 1) < (ControllerBufferSize - BufferState))
+                            {
+                                string send_line = File[FilePosition].Replace(" ", ""); // don't send whitespace to machine
 
-								writer.Write(send_line);
-								writer.Write('\n');
-								writer.Flush();
+                                writer.Write(send_line);
+                                writer.Write('\n');
+                                writer.Flush();
 
-								RecordLog("> " + send_line);
+                                RecordLog("> " + send_line);
 
-								RaiseEvent(UpdateStatus, send_line);
-								RaiseEvent(LineSent, send_line);
+                                RaiseEvent(UpdateStatus, send_line);
+                                RaiseEvent(LineSent, send_line);
 
-								BufferState += send_line.Length + 1;
+                                BufferState += send_line.Length + 1;
 
-								Sent.Enqueue(send_line);
+                                Sent.Enqueue(send_line);
 
-								if (PauseLines[FilePosition] && Properties.Settings.Default.PauseFileOnHold)
-								{
-									Mode = OperatingMode.Manual;
-								}
+                                if (PauseLines[FilePosition] && Properties.Settings.Default.PauseFileOnHold)
+                                {
+                                    Mode = OperatingMode.Manual;
+                                }
 
-								if (++FilePosition >= File.Count)
-								{
-									Mode = OperatingMode.Manual;
-								}
+                                if (++FilePosition >= File.Count)
+                                {
+                                    Mode = OperatingMode.Manual;
+                                }
 
-								filePosChanged = true;
-							}
-						}
-						else if (Mode == OperatingMode.SendMacro)
-						{
-							switch (Status)
-							{
-								case "Idle":
-									if (BufferState == 0 && SendMacroStatusReceived)
-									{
-										SendMacroStatusReceived = false;
+                                filePosChanged = true;
+                            }
+                        }
+                        else if (Mode == OperatingMode.SendMacro)
+                        {
+                            switch (Status)
+                            {
+                                case "Idle":
+                                    if (BufferState == 0 && SendMacroStatusReceived)
+                                    {
+                                        SendMacroStatusReceived = false;
 
-										string send_line = (string)ToSendMacro.Dequeue();
+                                        string send_line = (string)ToSendMacro.Dequeue();
 
-										send_line = Calculator.Evaluate(send_line, out bool success);
+                                        send_line = Calculator.Evaluate(send_line, out bool success);
 
-										if (!success)
-										{
-											ReportError("Error while evaluating macro!");
-											ReportError(send_line);
+                                        if (!success)
+                                        {
+                                            ReportError("Error while evaluating macro!");
+                                            ReportError(send_line);
 
-											ToSendMacro.Clear();
-										}
-										else
-										{
-											send_line = send_line.Replace(" ", "");
+                                            ToSendMacro.Clear();
+                                        }
+                                        else
+                                        {
+                                            send_line = send_line.Replace(" ", "");
 
-											writer.Write(send_line);
-											writer.Write('\n');
-											writer.Flush();
+                                            writer.Write(send_line);
+                                            writer.Write('\n');
+                                            writer.Flush();
 
-											RecordLog("> " + send_line);
+                                            RecordLog("> " + send_line);
 
-											RaiseEvent(UpdateStatus, send_line);
-											RaiseEvent(LineSent, send_line);
+                                            RaiseEvent(UpdateStatus, send_line);
+                                            RaiseEvent(LineSent, send_line);
 
-											BufferState += send_line.Length + 1;
+                                            BufferState += send_line.Length + 1;
 
-											Sent.Enqueue(send_line);
-										}
-									}
-									break;
-								case "Run":
-								case "Hold":
-									break;
-								default:    // grbl is in some kind of alarm state
-									ToSendMacro.Clear();
-									break;
-							}
+                                            Sent.Enqueue(send_line);
+                                        }
+                                    }
+                                    break;
+                                case "Run":
+                                case "Hold":
+                                    break;
+                                default:    // grbl is in some kind of alarm state
+                                    ToSendMacro.Clear();
+                                    break;
+                            }
 
-							if (ToSendMacro.Count == 0)
-								Mode = OperatingMode.Manual;
-						}
-						else if (ToSend.Count > 0 && (((string)ToSend.Peek()).Length + 1) < (ControllerBufferSize - BufferState))
-						{
-							string send_line = ((string)ToSend.Dequeue()).Replace(" ", "");
+                            if (ToSendMacro.Count == 0)
+                                Mode = OperatingMode.Manual;
+                        }
+                        else if (ToSend.Count > 0 && (((string)ToSend.Peek()).Length + 1) < (ControllerBufferSize - BufferState))
+                        {
+                            string send_line = ((string)ToSend.Dequeue()).Replace(" ", "");
 
-							writer.Write(send_line);
-							writer.Write('\n');
-							writer.Flush();
+                            writer.Write(send_line);
+                            writer.Write('\n');
+                            writer.Flush();
 
-							RecordLog("> " + send_line);
+                            RecordLog("> " + send_line);
 
-							RaiseEvent(UpdateStatus, send_line);
-							RaiseEvent(LineSent, send_line);
+                            RaiseEvent(UpdateStatus, send_line);
+                            RaiseEvent(LineSent, send_line);
 
-							BufferState += send_line.Length + 1;
+                            BufferState += send_line.Length + 1;
 
-							Sent.Enqueue(send_line);
-						}
+                            Sent.Enqueue(send_line);
+                        }
 
+                        DateTime Now = DateTime.Now;
 
-						DateTime Now = DateTime.Now;
+                        if ((Now - LastStatusPoll).TotalMilliseconds > StatusPollInterval)
+                        {
+                            writer.Write('?');
+                            writer.Flush();
+                            LastStatusPoll = Now;
+                        }
 
-						if ((Now - LastStatusPoll).TotalMilliseconds > StatusPollInterval)
-						{
-							writer.Write('?');
-							writer.Flush();
-							LastStatusPoll = Now;
-						}
+                        //only update file pos every X ms
+                        if (filePosChanged && (Now - LastFilePosUpdate).TotalMilliseconds > 500)
+                        {
+                            RaiseEvent(FilePositionChanged);
+                            LastFilePosUpdate = Now;
+                            filePosChanged = false;
+                        }
 
-						//only update file pos every X ms
-						if (filePosChanged && (Now - LastFilePosUpdate).TotalMilliseconds > 500)
-						{
-							RaiseEvent(FilePositionChanged);
-							LastFilePosUpdate = Now;
-							filePosChanged = false;
-						}
-
-						Thread.Sleep(WaitTime);
+                        Thread.Sleep(WaitTime);
 					}
 
 					string line = lineTask.Result;
+                    
+                    RecordLog("< " + line);                    
 
-					RecordLog("< " + line);
+                    if (line == "ok")
+                    {
+                        if (Sent.Count != 0)
+                        {
+                            BufferState -= ((string)Sent.Dequeue()).Length + 1;
+                        }
+                        else
+                        {
+                            Console.WriteLine("Received OK without anything in the Sent Buffer");
+                            BufferState = 0;
+                        }                       
+                    }
+                    else if (line.StartsWith("error:"))
+                    {
+                        if (Sent.Count != 0)
+                        {
+                            string errorline = (string)Sent.Dequeue();
 
-					if (line == "ok")
-					{
-						if (Sent.Count != 0)
-						{
-							BufferState -= ((string)Sent.Dequeue()).Length + 1;
-						}
-						else
-						{
-							Console.WriteLine("Received OK without anything in the Sent Buffer");
-							BufferState = 0;
-						}
-					}
-					else
-					{
-						if (line.StartsWith("error:"))
-						{
-							if (Sent.Count != 0)
-							{
-								string errorline = (string)Sent.Dequeue();
+                            RaiseEvent(ReportError, $"{line}: {errorline}");
+                            BufferState -= errorline.Length + 1;
+                        }
+                        else
+                        {
+                            if ((DateTime.Now - StartTime).TotalMilliseconds > 200)
+                                RaiseEvent(ReportError, $"Received <{line}> without anything in the Sent Buffer");
 
-								RaiseEvent(ReportError, $"{line}: {errorline}");
-								BufferState -= errorline.Length + 1;
-							}
-							else
-							{
-								if ((DateTime.Now - StartTime).TotalMilliseconds > 200)
-									RaiseEvent(ReportError, $"Received <{line}> without anything in the Sent Buffer");
+                            BufferState = 0;
+                        }
 
-								BufferState = 0;
-							}
-
-							Mode = OperatingMode.Manual;
-						}
-						else if (line.StartsWith("<"))
-						{
-							RaiseEvent(ParseStatus, line);
-							SendMacroStatusReceived = true;
-						}
-						else if (line.StartsWith("[PRB:"))
-						{
-							RaiseEvent(ParseProbe, line);
-							RaiseEvent(LineReceived, line);
-						}
-						else if (line.StartsWith("["))
-						{
-							RaiseEvent(UpdateStatus, line);
-							RaiseEvent(LineReceived, line);
-						}
-						else if (line.StartsWith("ALARM"))
-						{
-							RaiseEvent(ReportError, line);
-							Mode = OperatingMode.Manual;
-							ToSend.Clear();
-							ToSendMacro.Clear();
-						}
-						else if (line.StartsWith("grbl"))
-						{
-							RaiseEvent(LineReceived, line);
-							RaiseEvent(ParseStartup, line);
-						}
-						else if (line.Length > 0)
-							RaiseEvent(LineReceived, line);
-					}
+                        Mode = OperatingMode.Manual;
+                    }
+                    else if (line.StartsWith("<"))
+                    {
+                        RaiseEvent(ParseStatus, line);
+                        SendMacroStatusReceived = true;
+                    }
+                    else if (line.StartsWith("[PRB:"))
+                    {
+                        RaiseEvent(ParseProbe, line);
+                        RaiseEvent(LineReceived, line);
+                    }
+                    else if (line.StartsWith("["))
+                    {
+                        RaiseEvent(UpdateStatus, line);
+                        RaiseEvent(LineReceived, line);
+                    }
+                    else if (line.StartsWith("ALARM"))
+                    {
+                        RaiseEvent(ReportError, line);
+                        Mode = OperatingMode.Manual;
+                        ToSend.Clear();
+                        ToSendMacro.Clear();
+                    }
+                    else if (line.StartsWith("grbl"))
+                    {
+                        RaiseEvent(LineReceived, line);
+                        RaiseEvent(ParseStartup, line);
+                    }
+                    else if (line.Length > 0)
+                    {
+                        RaiseEvent(LineReceived, line);
+                    }
+					
 				}
 			}
 			catch (Exception ex)
@@ -475,7 +478,84 @@ namespace OpenCNCPilot.Communication
 			}
 		}
 
-		public void Connect()
+        private const double JOGDISTANCE = 10.0;
+        private bool joggingStarted = false;
+        private Vector3 jogStartMachinePosition = new Vector3();
+        private Vector3 jogStartDelta = new Vector3();
+        Stopwatch jogCanceled = new Stopwatch();
+
+        public void Jog(string axis, double direction, int feedrate)
+        {
+            if (Mode != Machine.OperatingMode.Manual)
+            {
+                RaiseEvent(Info, "Not in manual mode");
+                return;
+            }
+            
+            if ((!jogCanceled.IsRunning || jogCanceled.ElapsedMilliseconds>250) 
+             && (!joggingStarted 
+               || (Math.Abs(MachinePosition.X - jogStartMachinePosition.X) > jogStartDelta.X / 2)
+               || (Math.Abs(MachinePosition.Y - jogStartMachinePosition.Y) > jogStartDelta.Y / 2)
+               || (Math.Abs(MachinePosition.Z - jogStartMachinePosition.Z) > jogStartDelta.Z / 2)))
+            {
+                jogStartMachinePosition = MachinePosition;
+                jogStartDelta = new Vector3(0, 0, 0);
+                switch (axis)
+                {
+                    case "X":
+                        jogStartDelta.X = JOGDISTANCE;
+                        break;
+                    case "Y":
+                        jogStartDelta.Y = JOGDISTANCE;
+                        break;
+                    case "Z":
+                        jogStartDelta.Z = JOGDISTANCE;
+                        break;
+                }
+
+                string command = "$J=G91" + axis + (direction == -1.0 ? "-" : "") + JOGDISTANCE.ToString() + "F" + feedrate.ToString();
+                SendLine(command);
+               
+                joggingStarted = true;
+            }
+
+            Console.WriteLine("MachinePosition: " + MachinePosition.X.ToString() + " jogStartMachinePosition: " + jogStartMachinePosition.X + " jogStartDelta: " + jogStartDelta.X.ToString());
+
+
+
+        }
+
+        public void JogCancel()
+        {
+            if (!Connected)
+            {
+                RaiseEvent(Info, "Not Connected");
+                return;
+            }
+
+            if (Mode != Machine.OperatingMode.Manual)
+            {
+                RaiseEvent(Info, "Not in manual mode");
+                return;
+            }
+
+            if (BufferState > 0)
+            {
+                SoftReset();
+                return;
+            }
+
+            if (joggingStarted)
+            {
+                SendControl(0x85);
+                joggingStarted = false;
+                jogCanceled.Restart();
+                RaiseEvent(JogCanceled);
+            }         
+        }
+
+
+        public void Connect()
 		{
 			if (Connected)
 				throw new Exception("Can't Connect: Already Connected");
@@ -484,7 +564,10 @@ namespace OpenCNCPilot.Communication
 			{
 				case ConnectionType.Serial:
 					SerialPort port = new SerialPort(Properties.Settings.Default.SerialPortName, Properties.Settings.Default.SerialPortBaud);
-					port.Open();
+                    port.Encoding = System.Text.Encoding.GetEncoding(1252);
+                    port.WriteBufferSize = Properties.Settings.Default.ControllerBufferSize;
+                    port.ReadBufferSize = Properties.Settings.Default.ControllerBufferSize;
+                    port.Open();                    
 					Connection = port.BaseStream;
 					break;
 				default:
@@ -670,16 +753,7 @@ namespace OpenCNCPilot.Communication
 			ToSendPriority.Enqueue('~');
 		}
 
-		public void JogCancel()
-		{
-			if (!Connected)
-			{
-				RaiseEvent(Info, "Not Connected");
-				return;
-			}
-
-			ToSendPriority.Enqueue((char)0x85);
-		}
+        
 
 		public void SetFile(IList<string> file)
 		{
