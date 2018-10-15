@@ -3,7 +3,7 @@ OpenCNCPilot
 
 This branch is just a quick hack of Martin's great program.
 
-I only added the features I personally wanted: An Icon, Jog controls and thinner grid lines.
+I only added the features I personally wanted: An Icon, Jog controls, thinner grid lines and reminders to attach/remove the probe clamps.
 
 ![Screenshot](https://raw.githubusercontent.com/A-J-Bauer/OpenCNCPilot/master/img/Screenshot2.png)
 
