@@ -6,6 +6,7 @@ using Microsoft.Win32;
 using OpenCNCPilot.GCode;
 using System.Windows.Controls;
 using System.ComponentModel;
+using System.Windows.Input;
 
 namespace OpenCNCPilot
 {
@@ -30,12 +31,13 @@ namespace OpenCNCPilot
 			PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 		}
 
-		public MainWindow()
+       
+        public MainWindow()
 		{
 			AppDomain.CurrentDomain.UnhandledException += UnhandledException;
-			InitializeComponent();
+			InitializeComponent();           
 
-			openFileDialogGCode.FileOk += OpenFileDialogGCode_FileOk;
+            openFileDialogGCode.FileOk += OpenFileDialogGCode_FileOk;
 			saveFileDialogGCode.FileOk += SaveFileDialogGCode_FileOk;
 			openFileDialogHeightMap.FileOk += OpenFileDialogHeightMap_FileOk;
 			saveFileDialogHeightMap.FileOk += SaveFileDialogHeightMap_FileOk;
@@ -46,8 +48,9 @@ namespace OpenCNCPilot
 			machine.Info += Machine_Info;
 			machine.LineReceived += Machine_LineReceived;
 			machine.LineReceived += settingsWindow.LineReceived;
-			machine.StatusReceived += Machine_StatusReceived;
-			machine.LineSent += Machine_LineSent;
+            machine.JogCanceled += Controls_JogCanceled;    
+			machine.StatusReceived += Machine_StatusReceived;            
+            machine.LineSent += Machine_LineSent;
 
 			machine.PositionUpdateReceived += Machine_PositionUpdateReceived;
 			machine.StatusChanged += Machine_StatusChanged;
@@ -79,7 +82,9 @@ namespace OpenCNCPilot
 			UpdateCheck.CheckForUpdate();
 		}
 
-		public Vector3 LastProbePosMachine { get; set; }
+        
+
+        public Vector3 LastProbePosMachine { get; set; }
 		public Vector3 LastProbePosWork { get; set; }
 
 		private void Machine_ProbeFinished_UserOutput(Vector3 position, bool success)
@@ -155,7 +160,24 @@ namespace OpenCNCPilot
 			}
 		}
 
-		private void Window_Drop(object sender, DragEventArgs e)
+        private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
+        {
+            Properties.Settings.Default.Save();
+
+            if (machine.Connected)
+            {
+                MessageBox.Show("Can't close while connected!");
+                e.Cancel = true;
+                return;
+            }
+
+            Properties.Settings.Default.Save();
+
+            settingsWindow.Close();
+            Application.Current.Shutdown();
+        }
+
+        private void Window_Drop(object sender, DragEventArgs e)
 		{
 			if (e.Data.GetDataPresent(DataFormats.FileDrop))
 			{
@@ -343,6 +365,77 @@ namespace OpenCNCPilot
 			machine.SendLine("G49");
 		}
 
+        private void Window_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+        {
+            switch (e.Key)
+            {
+                case Key.Escape:
+                    if (machine.Connected && Properties.Settings.Default.EnableEscapeSoftReset)
+                        machine.SoftReset();
+                    break;
+                case Key.Left:
+                    if (machine.Connected)
+                    {
+                        Controls_JogXNegative();
+                    }
+                    e.Handled = Properties.Settings.Default.UseArrowAndPageButtonsForJogControls;
+                    break;
+                case Key.Right:
+                    if (machine.Connected)
+                    {
+                        Controls_JogXPositive();
+                    }
+                    e.Handled = Properties.Settings.Default.UseArrowAndPageButtonsForJogControls;
+                    break;
+                case Key.Down:
+                    if (machine.Connected)
+                    {
+                        Controls_JogYNegative();
+                    }
+                    e.Handled = Properties.Settings.Default.UseArrowAndPageButtonsForJogControls;
+                    break;
+                case Key.Up:
+                    if (machine.Connected)
+                    {
+                        Controls_JogYPositive();
+                    }
+                    e.Handled = Properties.Settings.Default.UseArrowAndPageButtonsForJogControls;
+                    break;
+                case Key.PageDown:
+                    if (machine.Connected)
+                    {
+                        Controls_JogZNegative();
+                    }
+                    e.Handled = Properties.Settings.Default.UseArrowAndPageButtonsForJogControls;
+                    break;
+                case Key.PageUp:
+                    if (machine.Connected)
+                    {
+                        Controls_JogZPositive();
+                    }
+                    e.Handled = Properties.Settings.Default.UseArrowAndPageButtonsForJogControls;
+                    break;
+            }   
+        }
 
-	}
+        private void Window_PreviewKeyUp(object sender, System.Windows.Input.KeyEventArgs e)
+        {
+            switch (e.Key)
+            {                
+                case Key.Left:
+                case Key.Right:                   
+                case Key.Down:                   
+                case Key.Up:                   
+                case Key.PageDown:                    
+                case Key.PageUp:
+                    if (machine.Connected)
+                    {
+                        Controls_JogCancel();
+                    }
+                    e.Handled = Properties.Settings.Default.UseArrowAndPageButtonsForJogControls;
+                    break;
+            }
+        }
+
+    }
 }
